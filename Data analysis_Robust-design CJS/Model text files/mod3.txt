@@ -1,0 +1,140 @@
+model{
+# RD model-------------------------------------
+#13 primary occasions, first 10 with 3 secondary sampling periods, last 3 with 2 sampling periods. Year 11 (2020) had no sampling - Survey covariate accounts for this. 
+
+#Model 3 – Gamma tide, p rand year, p=c
+# Survival: random year effect
+# Availability (gamma): fixed effect of tide amplitude
+# Capture: random year effect
+# Recapture: = capture
+
+#-------------
+#Section 1. Define priors for all parameters#
+#-------------
+
+#Survival parameters
+for (i in 1:n) {
+for (t in f[i]:(n1-1)){
+logit(phi[i,t]) <- phi.mu + phi.eps[t]
+} #t
+} #i
+
+for (t in 1:(n1-1)){
+phi.eps[t] ~ dnorm(0,phi.tau)
+} #t
+
+phi.mean ~ dunif(0,1) #Prior for mean survival
+phi.mu <- log(phi.mean/(1-phi.mean)) #logit transformation
+phi.tau <- pow(phi.sd,-2)
+phi.sd ~ dunif(0,5) #Prior for sd survival (temporal variance)
+
+#Availability
+
+for (i in 1:n) {
+for (t in f[i]:(n1-1)){
+logit(gamma[i,t]) <- gam.mu + beta*tide.mean[t]
+} #t
+} #i
+
+gam.mean ~ dunif(0,1) #Prior for mean fidelity
+gam.mu <- log(gam.mean/(1-gam.mean)) #logit transformation
+beta ~ dnorm(0,0.37)
+
+#Capture parameters - 2
+
+#for (i in 1:n) {
+#for (t in 1:n1) {
+#logit(p2[i,t]) <- p.mu2 + p.eps2[t]
+#} #t
+#} #i
+
+#for (t in 1:n1){
+#  p.eps2[t] ~ dnorm(0,p.tau2)
+#} #t
+
+#p.mean2 ~ dunif(0,1) #Prior for mean detection
+#p.mu2 <- log(p.mean2/(1-p.mean2)) #logit transformation
+#p.tau2 <- pow(p.sd2,-2)
+#p.sd2 ~ dunif(0,5) #Prior for sd p
+
+#Capture parameters - 1
+
+for (i in 1:n) {
+for (j in 1:n2) {
+p[i,j] <- p.j[j]*Survey[i,j]
+} #j
+} #i
+
+for (t in 1:n1){
+  p.eps[t] ~ dnorm(0,p.tau)
+  
+for (j in 1:nss[t]) {
+  p.eta[(cnss[t]+j)] <- p.mu + p.eps[t] #capture random year effects
+  p.j[(cnss[t]+j)] <- 1/(1+exp(-p.eta[(cnss[t]+j)])) #back-transformed year-specific capture
+} #j
+} #t
+
+p.mean ~ dunif(0,1) #Prior for mean detection
+p.mu <- log(p.mean/(1-p.mean)) #logit transformation
+p.tau <- pow(p.sd,-2)
+p.sd ~ dunif(0,5)
+
+#-------------
+#Section 2. Likelihoods#
+#-------------
+
+# State process #
+for (i in 1:n){
+
+z[i,f[i]] <- 1
+
+# Observation process for secondary periods in first primary period of capture
+for (j in 1:nss[f[i]]) { #Loop over secondary periods (times / days)
+    y[i,(cnss[f[i]]+j)] ~ dbern(p.eff[i,(cnss[f[i]]+j)])
+    p.eff[i,(cnss[f[i]]+j)] <- p[i,(cnss[f[i]]+j)]
+	loglike.waic[i,(cnss[f[i]]+j)] <- logdensity.bin(y[i,(cnss[f[i]]+j)],p.eff[i,(cnss[f[i]]+j)],1)
+} #j secondary
+
+# State and observation process in subsequent primary periods
+for (t in (f[i]+1):n1){
+	phi.eff[i,t] <- phi[i, t-1] * z[i,t-1]  # Effective survival rate
+	z[i,t] ~ dbern(phi.eff[i,t])
+	loglike.phi[i,t] <- logdensity.bin(z[i,t], phi.eff[i,t], 1) 
+	avail[i,t] <- gamma[i,t-1] * z[i,t] 
+	s[i,t] ~ dbern(avail[i,t])
+	loglike.avail[i,t] <- logdensity.bin(s[i,t], avail[i,t], 1) 
+	
+	for (j in 1:nss[t]) { #Loop over secondary periods (times / days)
+	y[i,(cnss[t]+j)] ~ dbern(p.eff[i,(cnss[t]+j)])
+	p.eff[i,(cnss[t]+j)] <- s[i,t] * p[i,(cnss[t]+j)]
+	loglike.waic[i,(cnss[t]+j)] <- logdensity.bin(y[i,(cnss[t]+j)],p.eff[i,(cnss[t]+j)],1)
+
+} #j secondary
+} #t primary
+
+#loglike for first primary period of capture
+for (t in f[i]){
+ll[i,t]<-sum(loglike.waic[i,(cnss[t]+1):(cnss[t]+nss[t])])
+}
+
+#loglike for subsequent primary periods
+for (t in (f[i]+1):n1){
+ll.w[i,t]<-sum(loglike.waic[i,(cnss[t]+1):(cnss[t]+nss[t])])
+ll[i,t]<-ll.w[i,t]+loglike.phi[i,t]+loglike.avail[i,t]
+}
+
+#individual (row) loglike
+loglike.new[i]<-sum(ll[i,f[i]:n1])
+
+} #i individual
+
+#---------
+#Section 3. Derived parameters#
+#---------
+
+#time specific phi
+for (t in 1:(n1-1)){
+phi.t[t] <- 1/(1+exp(-(phi.mu + phi.eps[t])))
+}
+
+}
